@@ -1,14 +1,18 @@
 import sys
 import io
+import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageOps
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
+from PySide6.QtCore import Qt, QThread, Signal, QSize
+from PySide6.QtGui import (
+    QFont, QDragEnterEvent, QDropEvent, QPainter, QColor, QLinearGradient,
+    QPixmap, QBrush, QPen, QPainterPath,
+)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QListWidget, QListWidgetItem, QFileDialog, QProgressBar,
-    QSpinBox, QGroupBox, QMessageBox, QAbstractItemView, QFrame
+    QSpinBox, QMessageBox, QAbstractItemView, QFrame, QGraphicsDropShadowEffect,
 )
 
 TARGET_KB = 100
@@ -122,6 +126,58 @@ class Worker(QThread):
         self.finished_all.emit()
 
 
+# ---------------------------------------------------------------------------
+# Visual helpers
+# ---------------------------------------------------------------------------
+
+def add_shadow(widget, blur=34, y=10, alpha=150, color="#050810"):
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(blur)
+    effect.setOffset(0, y)
+    c = QColor(color)
+    c.setAlpha(alpha)
+    effect.setColor(c)
+    widget.setGraphicsEffect(effect)
+    return effect
+
+
+class Backdrop(QWidget):
+    """Paints a soft aurora gradient that the glass panels sit on top of."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("root")
+        self._cache = None
+
+    def resizeEvent(self, event):
+        self._cache = None
+        super().resizeEvent(event)
+
+    def _render(self):
+        w = max(self.width(), 1)
+        h = max(self.height(), 1)
+        pm = QPixmap(w, h)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing, True)
+
+        # Flat, pure black backdrop with only a barely-there top sheen.
+        base = QLinearGradient(0, 0, 0, h)
+        base.setColorAt(0.0, QColor("#080808"))
+        base.setColorAt(0.45, QColor("#020202"))
+        base.setColorAt(1.0, QColor("#000000"))
+        p.fillRect(0, 0, w, h, QBrush(base))
+
+        p.end()
+        return pm
+
+    def paintEvent(self, event):
+        if self._cache is None or self._cache.size() != self.size():
+            self._cache = self._render()
+        p = QPainter(self)
+        p.drawPixmap(0, 0, self._cache)
+
+
 class DropList(QListWidget):
     files_dropped = Signal(list)
 
@@ -143,66 +199,176 @@ class DropList(QListWidget):
         event.acceptProposedAction()
 
 
+class FileRow(QWidget):
+    """A glass pill row used inside the file list."""
+
+    def __init__(self, name, meta, tooltip=""):
+        super().__init__()
+        self.setObjectName("fileRow")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 11, 14, 11)
+        lay.setSpacing(12)
+
+        self.name_label = QLabel(name)
+        self.name_label.setObjectName("rowName")
+        self.name_label.setToolTip(tooltip or name)
+
+        self.meta_label = QLabel(meta)
+        self.meta_label.setObjectName("rowMeta")
+
+        self.status_label = QLabel("Waiting")
+        self.status_label.setObjectName("rowStatus")
+        self.status_label.setProperty("kind", "neutral")
+
+        lay.addWidget(self.name_label, 1)
+        lay.addWidget(self.meta_label)
+        lay.addWidget(self.status_label)
+
+    def set_status(self, text, kind="neutral"):
+        self.status_label.setText(text)
+        self.status_label.setProperty("kind", kind)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+
+
+def _arrow_pixmap(color, up=True, size=10):
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.8)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    path = QPainterPath()
+    if up:
+        path.moveTo(1.5, size - 3.0)
+        path.lineTo(size / 2, 3.0)
+        path.lineTo(size - 1.5, size - 3.0)
+    else:
+        path.moveTo(1.5, 3.0)
+        path.lineTo(size / 2, size - 3.0)
+        path.lineTo(size - 1.5, 3.0)
+    p.drawPath(path)
+    p.end()
+    return pm
+
+
+def _write_arrow_assets(folder):
+    folder.mkdir(parents=True, exist_ok=True)
+    up = folder / "arrow_up.png"
+    down = folder / "arrow_down.png"
+    _arrow_pixmap("#cfcfcf", True).save(str(up))
+    _arrow_pixmap("#cfcfcf", False).save(str(down))
+    return up, down
+
+
+def _status_kind(note):
+    low = note.lower()
+    if "failed" in low or "cannot" in low or "unsupported" in low:
+        return "error"
+    if "target met" in low:
+        return "ok"
+    if "within" in low:
+        return "info"
+    if "could not" in low:
+        return "warn"
+    return "neutral"
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Image Compressor")
-        self.setMinimumSize(760, 620)
+        self.setMinimumSize(880, 840)
         self.files = []
+        self.rows = []
         self.worker = None
         self._build_ui()
         self.setAcceptDrops(True)
 
     def _build_ui(self):
-        root = QWidget()
-        root.setObjectName("root")
+        root = Backdrop()
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(30, 26, 30, 26)
+        layout.setSpacing(18)
 
+        # --- Header ------------------------------------------------------
         header = QHBoxLayout()
+        header.setSpacing(14)
+
+        mark = QLabel("IMG")
+        mark.setObjectName("logoMark")
+        mark.setFixedSize(52, 52)
+        mark.setAlignment(Qt.AlignCenter)
+        header.addWidget(mark)
+
         title_col = QVBoxLayout()
+        title_col.setSpacing(2)
         title = QLabel("Image Compressor")
         title.setObjectName("title")
-        subtitle = QLabel("Compress JPG and PNG images in batches")
+        subtitle = QLabel("Batch compress JPG & PNG — fast, quiet, fully offline")
         subtitle.setObjectName("subtitle")
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
         header.addLayout(title_col)
         header.addStretch()
-        badge = QLabel("OFFLINE")
+
+        badge = QLabel("●  OFFLINE")
         badge.setObjectName("badge")
         header.addWidget(badge, alignment=Qt.AlignTop)
         layout.addLayout(header)
 
+        # --- Drop zone ---------------------------------------------------
         drop = QFrame()
         drop.setObjectName("dropArea")
+        drop.setMinimumHeight(224)
         drop_layout = QVBoxLayout(drop)
-        drop_layout.setContentsMargins(18, 20, 18, 20)
-        drop_layout.setSpacing(8)
+        drop_layout.setContentsMargins(20, 26, 20, 26)
+        drop_layout.setSpacing(6)
+
         drop_icon = QLabel("＋")
         drop_icon.setObjectName("dropIcon")
+        drop_icon.setFixedSize(66, 66)
         drop_icon.setAlignment(Qt.AlignCenter)
-        drop_text = QLabel("Drop images here")
+
+        drop_text = QLabel("Drop your images here")
         drop_text.setObjectName("dropText")
         drop_text.setAlignment(Qt.AlignCenter)
-        drop_hint = QLabel("or choose files from your computer  •  JPG, JPEG, PNG")
+        drop_hint = QLabel("or browse from your computer   ·   JPG, JPEG, PNG")
         drop_hint.setObjectName("subtitle")
         drop_hint.setAlignment(Qt.AlignCenter)
+
         self.add_btn = QPushButton("Browse Images")
         self.add_btn.setObjectName("secondaryButton")
+        self.add_btn.setCursor(Qt.PointingHandCursor)
         self.add_btn.clicked.connect(self.choose_files)
-        drop_layout.addWidget(drop_icon)
+
+        icon_wrap = QHBoxLayout()
+        icon_wrap.addStretch()
+        icon_wrap.addWidget(drop_icon)
+        icon_wrap.addStretch()
+
+        btn_wrap = QHBoxLayout()
+        btn_wrap.addStretch()
+        btn_wrap.addWidget(self.add_btn)
+        btn_wrap.addStretch()
+
+        drop_layout.addLayout(icon_wrap)
         drop_layout.addWidget(drop_text)
         drop_layout.addWidget(drop_hint)
-        drop_layout.addWidget(self.add_btn, alignment=Qt.AlignCenter)
+        drop_layout.addSpacing(8)
+        drop_layout.addLayout(btn_wrap)
+        add_shadow(drop, blur=40, y=14, alpha=150)
         layout.addWidget(drop)
 
+        # --- List header -------------------------------------------------
         list_header = QHBoxLayout()
         list_label = QLabel("Selected images")
         list_label.setObjectName("sectionTitle")
         self.count_label = QLabel("0 files")
-        self.count_label.setObjectName("subtitle")
+        self.count_label.setObjectName("pill")
         list_header.addWidget(list_label)
         list_header.addStretch()
         list_header.addWidget(self.count_label)
@@ -210,78 +376,92 @@ class MainWindow(QMainWindow):
 
         self.list_widget = DropList()
         self.list_widget.setObjectName("fileList")
-        self.list_widget.setMinimumHeight(190)
+        self.list_widget.setMinimumHeight(180)
+        self.list_widget.setSelectionMode(QAbstractItemView.NoSelection)
+        self.list_widget.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list_widget.files_dropped.connect(self.add_files)
         layout.addWidget(self.list_widget, 1)
 
-        controls = QGroupBox("Compression settings")
-        controls.setObjectName("settings")
-        controls_layout = QHBoxLayout(controls)
-        controls_layout.setContentsMargins(16, 18, 16, 14)
-        controls_layout.addWidget(QLabel("Target size"))
+        # --- Settings card ----------------------------------------------
+        controls = QFrame()
+        controls.setObjectName("card")
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(20, 16, 20, 18)
+        controls_layout.setSpacing(12)
+
+        settings_title = QLabel("Compression settings")
+        settings_title.setObjectName("cardTitle")
+        controls_layout.addWidget(settings_title)
+
+        row = QHBoxLayout()
+        row.setSpacing(14)
+
+        target_col = QVBoxLayout()
+        target_col.setSpacing(5)
+        target_label = QLabel("Target size")
+        target_label.setObjectName("fieldLabel")
         self.target_spin = QSpinBox()
         self.target_spin.setRange(30, 5000)
         self.target_spin.setValue(TARGET_KB)
         self.target_spin.setSuffix(" KB")
-        controls_layout.addWidget(self.target_spin)
-        controls_layout.addSpacing(18)
-        controls_layout.addWidget(QLabel("Maximum allowed"))
+        target_col.addWidget(target_label)
+        target_col.addWidget(self.target_spin)
+
+        max_col = QVBoxLayout()
+        max_col.setSpacing(5)
+        max_label = QLabel("Maximum allowed")
+        max_label.setObjectName("fieldLabel")
         self.max_spin = QSpinBox()
         self.max_spin.setRange(50, 10000)
         self.max_spin.setValue(MAX_KB)
         self.max_spin.setSuffix(" KB")
-        controls_layout.addWidget(self.max_spin)
-        controls_layout.addStretch()
+        max_col.addWidget(max_label)
+        max_col.addWidget(self.max_spin)
+
+        row.addLayout(target_col)
+        row.addLayout(max_col)
+        row.addStretch()
+
         self.clear_btn = QPushButton("Clear list")
         self.clear_btn.setObjectName("textButton")
+        self.clear_btn.setCursor(Qt.PointingHandCursor)
         self.clear_btn.clicked.connect(self.clear_files)
-        controls_layout.addWidget(self.clear_btn)
+        row.addWidget(self.clear_btn, alignment=Qt.AlignBottom)
+
+        controls_layout.addLayout(row)
+        add_shadow(controls, blur=30, y=10, alpha=120)
         layout.addWidget(controls)
 
+        # --- Progress ----------------------------------------------------
         self.progress = QProgressBar()
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
+        self.progress.setFixedHeight(12)
         layout.addWidget(self.progress)
 
+        # --- Footer ------------------------------------------------------
         footer = QHBoxLayout()
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("subtitle")
         footer.addWidget(self.status_label)
         footer.addStretch()
+
         self.compress_btn = QPushButton("Compress Images")
         self.compress_btn.setObjectName("primaryButton")
-        self.compress_btn.setMinimumWidth(190)
+        self.compress_btn.setMinimumWidth(200)
+        self.compress_btn.setMinimumHeight(46)
+        self.compress_btn.setCursor(Qt.PointingHandCursor)
         self.compress_btn.clicked.connect(self.start_compression)
+        add_shadow(self.compress_btn, blur=26, y=8, alpha=170, color="#000000")
         footer.addWidget(self.compress_btn)
         layout.addLayout(footer)
 
         self.setCentralWidget(root)
-        self.setStyleSheet("""
-            QWidget#root { background: #10141d; color: #e8edf5; font-family: "Segoe UI"; font-size: 10pt; }
-            QLabel#title { font-size: 23pt; font-weight: 700; color: #f4f7fb; }
-            QLabel#subtitle { color: #98a4b5; font-size: 9pt; }
-            QLabel#badge { color: #6ee7b7; background: #12352e; border: 1px solid #1d5948; border-radius: 9px; padding: 5px 10px; font-size: 8pt; font-weight: 700; }
-            QFrame#dropArea { background: #171e2a; border: 2px dashed #3b4a60; border-radius: 14px; }
-            QLabel#dropIcon { color: #7c9cff; font-size: 28pt; }
-            QLabel#dropText { color: #f4f7fb; font-size: 14pt; font-weight: 600; }
-            QLabel#sectionTitle { font-size: 12pt; font-weight: 600; }
-            QListWidget#fileList { background: #171e2a; border: 1px solid #2b3545; border-radius: 12px; padding: 7px; outline: 0; }
-            QListWidget#fileList::item { padding: 10px; border-bottom: 1px solid #273142; }
-            QGroupBox#settings { border: 1px solid #2b3545; border-radius: 12px; margin-top: 8px; padding-top: 10px; color: #cbd5e1; font-weight: 600; }
-            QGroupBox#settings::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; }
-            QSpinBox { background: #202a39; border: 1px solid #3a475a; border-radius: 7px; padding: 7px; min-width: 85px; color: white; }
-            QPushButton { border: 0; border-radius: 8px; padding: 10px 16px; font-weight: 600; }
-            QPushButton#primaryButton { background: #5578f6; color: white; }
-            QPushButton#primaryButton:hover { background: #6b89ff; }
-            QPushButton#primaryButton:disabled { background: #38445e; color: #8793a8; }
-            QPushButton#secondaryButton { background: #263449; color: #dce6f7; border: 1px solid #40516b; }
-            QPushButton#secondaryButton:hover { background: #30425c; }
-            QPushButton#textButton { background: transparent; color: #aab7ca; }
-            QPushButton#textButton:hover { color: white; background: #263449; }
-            QProgressBar { background: #202a39; border: 0; border-radius: 6px; height: 10px; text-align: center; color: #dce6f7; }
-            QProgressBar::chunk { background: #5578f6; border-radius: 6px; }
-        """)
+        up, down = _write_arrow_assets(Path(tempfile.gettempdir()) / "image_compressor_assets")
+        css = STYLESHEET.replace("__ARROW_UP__", up.as_posix()).replace("__ARROW_DOWN__", down.as_posix())
+        self.setStyleSheet(css)
 
+    # --- actions ---------------------------------------------------------
     def choose_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Choose images", "", "Images (*.jpg *.jpeg *.png)"
@@ -289,28 +469,35 @@ class MainWindow(QMainWindow):
         self.add_files(paths)
 
     def add_files(self, paths):
-        valid = []
+        added = 0
         for p in paths:
             path = Path(p)
             if path.is_file() and path.suffix.lower() in (".jpg", ".jpeg", ".png"):
                 if str(path) not in self.files:
                     self.files.append(str(path))
-                    valid.append(path)
-        for path in valid:
-            try:
-                size = format_size(path.stat().st_size)
-            except OSError:
-                size = "Unknown size"
-            item = QListWidgetItem(f"  {path.name}     •     {size}     →     Waiting")
-            item.setToolTip(str(path))
-            self.list_widget.addItem(item)
-        self.count_label.setText(f"{len(self.files)} files")
-        self.status_label.setText(f"{len(self.files)} image(s) ready")
+                    try:
+                        size = format_size(path.stat().st_size)
+                    except OSError:
+                        size = "Unknown size"
+                    self._add_row(path.name, size, str(path))
+                    added += 1
+        if added:
+            self.count_label.setText(f"{len(self.files)} files")
+            self.status_label.setText(f"{len(self.files)} image(s) ready")
+
+    def _add_row(self, name, meta, tooltip):
+        row = FileRow(name, meta, tooltip)
+        item = QListWidgetItem()
+        item.setSizeHint(QSize(0, row.sizeHint().height() + 6))
+        self.list_widget.addItem(item)
+        self.list_widget.setItemWidget(item, row)
+        self.rows.append(row)
 
     def clear_files(self):
         if self.worker and self.worker.isRunning():
             return
         self.files.clear()
+        self.rows.clear()
         self.list_widget.clear()
         self.count_label.setText("0 files")
         self.progress.setValue(0)
@@ -334,7 +521,7 @@ class MainWindow(QMainWindow):
         self.add_btn.setEnabled(False)
         self.clear_btn.setEnabled(False)
         self.progress.setValue(0)
-        self.status_label.setText("Compressing...")
+        self.status_label.setText("Compressing…")
         self.worker = Worker(self.files, output_dir, target, maximum)
         self.worker.progress.connect(self.progress.setValue)
         self.worker.item_done.connect(self.update_item)
@@ -342,10 +529,9 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def update_item(self, index, size, note):
-        item = self.list_widget.item(index)
-        if item:
-            name = Path(self.files[index]).name
-            item.setText(f"  {name}     •     {size}     •     {note}")
+        if 0 <= index < len(self.rows):
+            self.rows[index].meta_label.setText(size)
+            self.rows[index].set_status(note, _status_kind(note))
 
     def compression_finished(self):
         self.compress_btn.setEnabled(True)
@@ -363,9 +549,239 @@ class MainWindow(QMainWindow):
         event.acceptProposedAction()
 
 
+STYLESHEET = """
+QWidget#root {
+    color: #ededed;
+    font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+    font-size: 10pt;
+}
+
+QLabel#logoMark {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #fafafa, stop:1 #c9c9c9);
+    color: #0a0a0a;
+    border-radius: 15px;
+    font-size: 11pt;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+QLabel#title { font-size: 24pt; font-weight: 700; color: #ffffff; }
+QLabel#subtitle { color: #8a8a8a; font-size: 9.5pt; }
+
+QLabel#badge {
+    color: #d8d8d8;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 12px;
+    padding: 6px 13px;
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+QLabel#sectionTitle { font-size: 12.5pt; font-weight: 600; color: #f5f5f5; }
+
+QLabel#pill {
+    color: #c4c4c4;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 11px;
+    padding: 4px 12px;
+    font-size: 8.5pt;
+    font-weight: 600;
+}
+
+/* Glass card */
+QFrame#card {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 18px;
+}
+QLabel#cardTitle { font-size: 11pt; font-weight: 600; color: #ededed; }
+QLabel#fieldLabel { color: #8a8a8a; font-size: 8.5pt; font-weight: 600; }
+
+/* Drop area */
+QFrame#dropArea {
+    background: rgba(255, 255, 255, 0.03);
+    border: 2px dashed rgba(255, 255, 255, 0.30);
+    border-radius: 22px;
+}
+QLabel#dropIcon {
+    color: #f0f0f0;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 33px;
+    font-size: 30pt;
+}
+QLabel#dropText { color: #f7f7f7; font-size: 15pt; font-weight: 600; }
+
+/* File list */
+QListWidget#fileList {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 18px;
+    padding: 8px;
+    outline: 0;
+}
+QListWidget#fileList::item {
+    background: transparent;
+    border: 0;
+    border-radius: 12px;
+    margin: 3px 2px;
+}
+QListWidget#fileList::item:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+QLabel#rowName { color: #f2f2f2; font-size: 10pt; font-weight: 600; }
+QLabel#rowMeta { color: #8a8a8a; font-size: 9pt; }
+QLabel#rowStatus {
+    border-radius: 11px;
+    padding: 5px 12px;
+    font-size: 8.5pt;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.06);
+    color: #c4c4c4;
+}
+QLabel#rowStatus[kind="ok"]    { background: rgba(255, 255, 255, 0.16); color: #ffffff; }
+QLabel#rowStatus[kind="info"]  { background: rgba(255, 255, 255, 0.10); color: #dcdcdc; }
+QLabel#rowStatus[kind="warn"]  { background: rgba(255, 255, 255, 0.06); color: #b0b0b0; }
+QLabel#rowStatus[kind="error"] { background: rgba(255, 255, 255, 0.04); color: #8f8f8f; }
+
+/* Inputs */
+QSpinBox {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 11px;
+    padding: 8px 10px;
+    min-width: 92px;
+    color: #f5f5f5;
+    selection-background-color: #444444;
+}
+QSpinBox:hover { border: 1px solid rgba(255, 255, 255, 0.32); }
+QSpinBox:focus { border: 1px solid rgba(255, 255, 255, 0.55); }
+QSpinBox::up-button, QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 22px;
+    background: transparent;
+    border: 0;
+}
+QSpinBox::up-button { subcontrol-position: top right; margin: 4px 4px 0 0; }
+QSpinBox::down-button { subcontrol-position: bottom right; margin: 0 4px 4px 0; }
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 5px;
+}
+QSpinBox::up-arrow {
+    image: url("__ARROW_UP__");
+    width: 10px;
+    height: 10px;
+}
+QSpinBox::down-arrow {
+    image: url("__ARROW_DOWN__");
+    width: 10px;
+    height: 10px;
+}
+
+/* Buttons */
+QPushButton { border: 0; border-radius: 12px; padding: 10px 18px; font-weight: 600; }
+
+QPushButton#primaryButton {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ffffff, stop:1 #d0d0d0);
+    color: #0a0a0a;
+    font-size: 10.5pt;
+    font-weight: 700;
+}
+QPushButton#primaryButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ffffff, stop:1 #e2e2e2);
+}
+QPushButton#primaryButton:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #d8d8d8, stop:1 #b4b4b4);
+}
+QPushButton#primaryButton:disabled {
+    background: rgba(255, 255, 255, 0.08);
+    color: #6f6f6f;
+}
+
+QPushButton#secondaryButton {
+    background: rgba(255, 255, 255, 0.08);
+    color: #f0f0f0;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+}
+QPushButton#secondaryButton:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border: 1px solid rgba(255, 255, 255, 0.38);
+}
+QPushButton#secondaryButton:disabled { color: #6f6f6f; }
+
+QPushButton#textButton {
+    background: transparent;
+    color: #9a9a9a;
+}
+QPushButton#textButton:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.08);
+}
+QPushButton#textButton:disabled { color: #565656; }
+
+/* Progress */
+QProgressBar {
+    background: rgba(255, 255, 255, 0.06);
+    border: 0;
+    border-radius: 6px;
+    text-align: center;
+    color: #dcdcdc;
+    font-size: 8pt;
+    font-weight: 600;
+}
+QProgressBar::chunk {
+    border-radius: 6px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #e8e8e8, stop:1 #9a9a9a);
+}
+"""
+
+
+def _apply_dark_titlebar(window):
+    """Ask Windows to render the native title bar in dark mode."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        hwnd = int(window.winId())
+        dwm = ctypes.windll.dwmapi
+        value = ctypes.c_int(1)
+        # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE (Win10 2004+); 19 on older builds.
+        for attr in (20, 19):
+            res = dwm.DwmSetWindowAttribute(
+                hwnd, attr, ctypes.byref(value), ctypes.sizeof(value)
+            )
+            if res == 0:
+                break
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    pal = app.palette()
+    pal.setColor(pal.ColorRole.Window, QColor("#0a0a0a"))
+    pal.setColor(pal.ColorRole.WindowText, QColor("#ededed"))
+    pal.setColor(pal.ColorRole.Base, QColor("#0f0f0f"))
+    pal.setColor(pal.ColorRole.AlternateBase, QColor("#151515"))
+    pal.setColor(pal.ColorRole.Text, QColor("#ededed"))
+    pal.setColor(pal.ColorRole.Button, QColor("#1a1a1a"))
+    pal.setColor(pal.ColorRole.ButtonText, QColor("#ededed"))
+    pal.setColor(pal.ColorRole.ToolTipBase, QColor("#1a1a1a"))
+    pal.setColor(pal.ColorRole.ToolTipText, QColor("#ededed"))
+    pal.setColor(pal.ColorRole.Highlight, QColor("#3a3a3a"))
+    pal.setColor(pal.ColorRole.HighlightedText, QColor("#ffffff"))
+    app.setPalette(pal)
+    font = QFont("Segoe UI Variable Display", 10)
+    if not font.exactMatch():
+        font = QFont("Segoe UI", 10)
+    app.setFont(font)
     window = MainWindow()
     window.show()
+    _apply_dark_titlebar(window)
     sys.exit(app.exec())
