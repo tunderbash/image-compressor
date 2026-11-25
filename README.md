@@ -15,11 +15,22 @@ A small offline Windows desktop app for batch JPG/JPEG and PNG compression.
 3. Run: `py -m pip install -r requirements.txt`
 4. Run: `py main.py`
 
-## Build a portable Windows executable
-Run `build_windows.bat`. The executable will be created at:
-`dist\ImageCompressor\ImageCompressor.exe`
+## Build a Windows executable and setup
+Run `build_setup.bat`. It installs the dependencies, builds a **single-file**
+executable, and packages an installer. Output:
 
-The `dist\ImageCompressor` folder is portable: copy the whole folder to another Windows PC. It is not a single-file EXE.
+- `dist\ImageCompressor.exe` — portable single-file app (just run it).
+- `dist\ImageCompressor-Setup.exe` — installer: asks where to install, then
+  creates Start Menu and Desktop shortcuts and registers the app in
+  "Apps & Features".
+
+To remove an installed copy, use "Apps & Features" (Uninstall) or run
+`uninstall.cmd` inside the install folder.
+
+> The setup is a self-extracting `.exe` (built with Windows IExpress), so it
+> needs no administrator rights and no extra tools. A true `.msi` would require
+> the WiX Toolset and admin rights; this `.exe` installer gives the same
+> graphical experience without them.
 
 ## Notes
 JPEG compression is lossy by nature. This app does not resize images. For JPEG files, the app tries to preserve the best quality it can while staying under the selected maximum. If the file cannot fit even at its lowest configured quality, it outputs the best attempt and reports its size.
