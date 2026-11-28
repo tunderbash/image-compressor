@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QListWidget, QListWidgetItem, QFileDialog, QProgressBar,
     QSpinBox, QMessageBox, QAbstractItemView, QFrame, QGraphicsDropShadowEffect,
-    QScrollArea, QSizePolicy,
+    QScrollArea, QSizePolicy, QLayout,
 )
 
 TARGET_KB = 100
@@ -373,9 +373,12 @@ class MainWindow(QMainWindow):
         drop_layout.addWidget(drop_hint)
         drop_layout.addSpacing(6)
         drop_layout.addLayout(btn_wrap)
-        # Size the box to its content and never let it shrink below that,
-        # otherwise Qt squeezes the icon/label/button on top of each other.
+        # Never let the box shrink below its content: fixed vertical policy
+        # plus a hard minimum height prevents the icon/labels/button from
+        # ever being squeezed on top of each other.
         drop.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        drop_layout.setSizeConstraint(QLayout.SetMinimumSize)
+        drop.setMinimumHeight(drop_layout.minimumSize().height())
         add_shadow(drop, blur=40, y=14, alpha=150)
         layout.addWidget(drop)
 
