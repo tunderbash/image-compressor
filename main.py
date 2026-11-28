@@ -142,6 +142,48 @@ def add_shadow(widget, blur=34, y=10, alpha=150, color="#050810"):
     return effect
 
 
+# The vivid multi-colour accent used across the whole interface.
+ACCENT_GRADIENT = [
+    ("0", "#ff3d7f"),
+    ("0.25", "#ff8a3d"),
+    ("0.5", "#ffd53d"),
+    ("0.75", "#3de1a0"),
+    ("1", "#3da9ff"),
+]
+
+
+def css_gradient(colors=None, horizontal=True):
+    """Build a QSS qlineargradient string from (stop, colour) pairs."""
+    colors = colors or ACCENT_GRADIENT
+    end = f"x2:1, y2:0" if horizontal else f"x2:0, y2:1"
+    stops = ", ".join(f"stop:{pos} {col}" for pos, col in colors)
+    return f"qlineargradient(x1:0, y1:0, {end}, {stops})"
+
+
+class GradientLabel(QLabel):
+    """A label whose glyphs are filled with a multi-colour gradient."""
+
+    def __init__(self, text, colors=None, horizontal=True):
+        super().__init__(text)
+        self._colors = colors or ACCENT_GRADIENT
+        self._horizontal = horizontal
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        if self._horizontal:
+            grad = QLinearGradient(0, 0, self.width(), 0)
+        else:
+            grad = QLinearGradient(0, 0, 0, self.height())
+        n = max(len(self._colors) - 1, 1)
+        for i, (_pos, col) in enumerate(self._colors):
+            grad.setColorAt(i / n, QColor(col))
+        painter.setPen(QPen(QBrush(grad), 0))
+        painter.setFont(self.font())
+        painter.drawText(self.rect(), int(self.alignment()), self.text())
+        painter.end()
+
+
 class Backdrop(QWidget):
     """Paints a soft aurora gradient that the glass panels sit on top of."""
 
@@ -217,7 +259,7 @@ class FileRow(QWidget):
         self.meta_label = QLabel(meta)
         self.meta_label.setObjectName("rowMeta")
 
-        self.status_label = QLabel("Waiting")
+        self.status_label = QLabel("waiting")
         self.status_label.setObjectName("rowStatus")
         self.status_label.setProperty("kind", "neutral")
 
@@ -297,26 +339,26 @@ class MainWindow(QMainWindow):
 
         # Header stays fixed at the top.
         header = QHBoxLayout()
-        header.setSpacing(14)
+        header.setSpacing(16)
 
-        mark = QLabel("IMG")
+        mark = QLabel("ic")
         mark.setObjectName("logoMark")
-        mark.setFixedSize(52, 52)
+        mark.setFixedSize(56, 56)
         mark.setAlignment(Qt.AlignCenter)
         header.addWidget(mark)
 
         title_col = QVBoxLayout()
-        title_col.setSpacing(2)
-        title = QLabel("Image Compressor")
+        title_col.setSpacing(3)
+        title = GradientLabel("image compressor")
         title.setObjectName("title")
-        subtitle = QLabel("Batch compress JPG & PNG — fast, quiet, fully offline")
+        subtitle = QLabel("batch compress jpg & png · fast, quiet, fully offline")
         subtitle.setObjectName("subtitle")
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
         header.addLayout(title_col)
         header.addStretch()
 
-        badge = QLabel("●  OFFLINE")
+        badge = QLabel("●  offline")
         badge.setObjectName("badge")
         header.addWidget(badge, alignment=Qt.AlignTop)
         outer.addLayout(header)
@@ -338,22 +380,22 @@ class MainWindow(QMainWindow):
         drop = QFrame()
         drop.setObjectName("dropArea")
         drop_layout = QVBoxLayout(drop)
-        drop_layout.setContentsMargins(18, 20, 18, 20)
-        drop_layout.setSpacing(4)
+        drop_layout.setContentsMargins(18, 16, 18, 16)
+        drop_layout.setSpacing(3)
 
         drop_icon = QLabel("＋")
         drop_icon.setObjectName("dropIcon")
-        drop_icon.setFixedSize(56, 56)
+        drop_icon.setFixedSize(48, 48)
         drop_icon.setAlignment(Qt.AlignCenter)
 
-        drop_text = QLabel("Drop your images here")
+        drop_text = QLabel("drop your images here")
         drop_text.setObjectName("dropText")
         drop_text.setAlignment(Qt.AlignCenter)
-        drop_hint = QLabel("or browse from your computer   ·   JPG, JPEG, PNG")
+        drop_hint = QLabel("or browse from your computer   ·   jpg, jpeg, png")
         drop_hint.setObjectName("subtitle")
         drop_hint.setAlignment(Qt.AlignCenter)
 
-        self.add_btn = QPushButton("Browse Images")
+        self.add_btn = QPushButton("browse images")
         self.add_btn.setObjectName("secondaryButton")
         self.add_btn.setCursor(Qt.PointingHandCursor)
         self.add_btn.clicked.connect(self.choose_files)
@@ -384,7 +426,7 @@ class MainWindow(QMainWindow):
 
         # --- List header -------------------------------------------------
         list_header = QHBoxLayout()
-        list_label = QLabel("Selected images")
+        list_label = QLabel("selected images")
         list_label.setObjectName("sectionTitle")
         self.count_label = QLabel("0 files")
         self.count_label.setObjectName("pill")
@@ -408,7 +450,7 @@ class MainWindow(QMainWindow):
         controls_layout.setContentsMargins(20, 16, 20, 18)
         controls_layout.setSpacing(12)
 
-        settings_title = QLabel("Compression settings")
+        settings_title = GradientLabel("compression settings")
         settings_title.setObjectName("cardTitle")
         controls_layout.addWidget(settings_title)
 
@@ -417,7 +459,7 @@ class MainWindow(QMainWindow):
 
         target_col = QVBoxLayout()
         target_col.setSpacing(5)
-        target_label = QLabel("Target size")
+        target_label = QLabel("target size")
         target_label.setObjectName("fieldLabel")
         self.target_spin = QSpinBox()
         self.target_spin.setRange(30, 5000)
@@ -428,7 +470,7 @@ class MainWindow(QMainWindow):
 
         max_col = QVBoxLayout()
         max_col.setSpacing(5)
-        max_label = QLabel("Maximum allowed")
+        max_label = QLabel("maximum allowed")
         max_label.setObjectName("fieldLabel")
         self.max_spin = QSpinBox()
         self.max_spin.setRange(50, 10000)
@@ -441,7 +483,7 @@ class MainWindow(QMainWindow):
         row.addLayout(max_col)
         row.addStretch()
 
-        self.clear_btn = QPushButton("Clear list")
+        self.clear_btn = QPushButton("clear list")
         self.clear_btn.setObjectName("textButton")
         self.clear_btn.setCursor(Qt.PointingHandCursor)
         self.clear_btn.clicked.connect(self.clear_files)
@@ -459,12 +501,12 @@ class MainWindow(QMainWindow):
 
         # --- Footer ------------------------------------------------------
         footer = QHBoxLayout()
-        self.status_label = QLabel("Ready")
+        self.status_label = QLabel("ready")
         self.status_label.setObjectName("subtitle")
         footer.addWidget(self.status_label)
         footer.addStretch()
 
-        self.compress_btn = QPushButton("Compress Images")
+        self.compress_btn = QPushButton("compress images")
         self.compress_btn.setObjectName("primaryButton")
         self.compress_btn.setMinimumWidth(200)
         self.compress_btn.setMinimumHeight(46)
@@ -525,7 +567,7 @@ class MainWindow(QMainWindow):
         self.list_widget.clear()
         self.count_label.setText("0 files")
         self.progress.setValue(0)
-        self.status_label.setText("Ready")
+        self.status_label.setText("ready")
 
     def start_compression(self):
         if not self.files:
@@ -545,7 +587,7 @@ class MainWindow(QMainWindow):
         self.add_btn.setEnabled(False)
         self.clear_btn.setEnabled(False)
         self.progress.setValue(0)
-        self.status_label.setText("Compressing…")
+        self.status_label.setText("compressing…")
         self.worker = Worker(self.files, output_dir, target, maximum)
         self.worker.progress.connect(self.progress.setValue)
         self.worker.item_done.connect(self.update_item)
@@ -561,7 +603,7 @@ class MainWindow(QMainWindow):
         self.compress_btn.setEnabled(True)
         self.add_btn.setEnabled(True)
         self.clear_btn.setEnabled(True)
-        self.status_label.setText("Finished — check the output folder")
+        self.status_label.setText("finished — check the output folder")
         QMessageBox.information(self, "Done", "Image processing is complete.\nCheck the output folder for the results.")
 
     def dragEnterEvent(self, event):
@@ -593,21 +635,21 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 
 QLabel#logoMark {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #fafafa, stop:1 #c9c9c9);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ff3d7f, stop:0.25 #ff8a3d, stop:0.5 #ffd53d, stop:0.75 #3de1a0, stop:1 #3da9ff);
     color: #0a0a0a;
-    border-radius: 15px;
-    font-size: 11pt;
+    border-radius: 16px;
+    font-size: 20pt;
     font-weight: 800;
-    letter-spacing: 1px;
+    padding-bottom: 2px;
 }
 
-QLabel#title { font-size: 24pt; font-weight: 700; color: #ffffff; }
+QLabel#title { font-size: 27pt; font-weight: 800; padding: 0; }
 QLabel#subtitle { color: #8a8a8a; font-size: 9.5pt; }
 
 QLabel#badge {
-    color: #d8d8d8;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #3de1a0;
+    background: rgba(61, 225, 160, 0.08);
+    border: 1px solid rgba(61, 225, 160, 0.30);
     border-radius: 12px;
     padding: 6px 13px;
     font-size: 8pt;
@@ -646,10 +688,10 @@ QLabel#dropIcon {
     color: #f0f0f0;
     background: rgba(255, 255, 255, 0.07);
     border: 1px solid rgba(255, 255, 255, 0.22);
-    border-radius: 28px;
-    font-size: 26pt;
+    border-radius: 24px;
+    font-size: 22pt;
 }
-QLabel#dropText { color: #f7f7f7; font-size: 15pt; font-weight: 600; }
+QLabel#dropText { color: #f7f7f7; font-size: 16pt; font-weight: 700; }
 
 /* File list */
 QListWidget#fileList {
@@ -679,10 +721,10 @@ QLabel#rowStatus {
     background: rgba(255, 255, 255, 0.06);
     color: #c4c4c4;
 }
-QLabel#rowStatus[kind="ok"]    { background: rgba(255, 255, 255, 0.16); color: #ffffff; }
-QLabel#rowStatus[kind="info"]  { background: rgba(255, 255, 255, 0.10); color: #dcdcdc; }
-QLabel#rowStatus[kind="warn"]  { background: rgba(255, 255, 255, 0.06); color: #b0b0b0; }
-QLabel#rowStatus[kind="error"] { background: rgba(255, 255, 255, 0.04); color: #8f8f8f; }
+QLabel#rowStatus[kind="ok"]    { background: rgba(61, 225, 160, 0.16); color: #3de1a0; }
+QLabel#rowStatus[kind="info"]  { background: rgba(61, 169, 255, 0.16); color: #6cc0ff; }
+QLabel#rowStatus[kind="warn"]  { background: rgba(255, 180, 61, 0.16); color: #ffc46c; }
+QLabel#rowStatus[kind="error"] { background: rgba(255, 61, 127, 0.16); color: #ff6c9d; }
 
 /* Inputs */
 QSpinBox {
@@ -723,16 +765,16 @@ QSpinBox::down-arrow {
 QPushButton { border: 0; border-radius: 12px; padding: 10px 18px; font-weight: 600; }
 
 QPushButton#primaryButton {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ffffff, stop:1 #d0d0d0);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff3d7f, stop:0.25 #ff8a3d, stop:0.5 #ffd53d, stop:0.75 #3de1a0, stop:1 #3da9ff);
     color: #0a0a0a;
     font-size: 10.5pt;
-    font-weight: 700;
+    font-weight: 800;
 }
 QPushButton#primaryButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ffffff, stop:1 #e2e2e2);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff5c93, stop:0.25 #ffa05c, stop:0.5 #ffe05c, stop:0.75 #5cf0b8, stop:1 #5cc0ff);
 }
 QPushButton#primaryButton:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #d8d8d8, stop:1 #b4b4b4);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #e02f6c, stop:0.5 #e0bb2f, stop:1 #2f95e0);
 }
 QPushButton#primaryButton:disabled {
     background: rgba(255, 255, 255, 0.08);
@@ -772,7 +814,7 @@ QProgressBar {
 }
 QProgressBar::chunk {
     border-radius: 6px;
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #e8e8e8, stop:1 #9a9a9a);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff3d7f, stop:0.25 #ff8a3d, stop:0.5 #ffd53d, stop:0.75 #3de1a0, stop:1 #3da9ff);
 }
 """
 
@@ -818,6 +860,14 @@ if __name__ == "__main__":
         font = QFont("Segoe UI", 10)
     app.setFont(font)
     window = MainWindow()
+    screen = app.primaryScreen()
+    if screen is not None:
+        avail = screen.availableGeometry()
+        w = min(980, max(820, avail.width() - 80))
+        h = min(920, max(560, avail.height() - 80))
+        window.resize(w, h)
+    else:
+        window.resize(980, 900)
     window.show()
     _apply_dark_titlebar(window)
     sys.exit(app.exec())
