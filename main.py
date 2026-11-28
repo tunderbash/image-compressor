@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QListWidget, QListWidgetItem, QFileDialog, QProgressBar,
     QSpinBox, QMessageBox, QAbstractItemView, QFrame, QGraphicsDropShadowEffect,
-    QScrollArea,
+    QScrollArea, QSizePolicy,
 )
 
 TARGET_KB = 100
@@ -337,10 +337,9 @@ class MainWindow(QMainWindow):
         # --- Drop zone ---------------------------------------------------
         drop = QFrame()
         drop.setObjectName("dropArea")
-        drop.setMinimumHeight(150)
         drop_layout = QVBoxLayout(drop)
-        drop_layout.setContentsMargins(18, 16, 18, 16)
-        drop_layout.setSpacing(3)
+        drop_layout.setContentsMargins(18, 20, 18, 20)
+        drop_layout.setSpacing(4)
 
         drop_icon = QLabel("＋")
         drop_icon.setObjectName("dropIcon")
@@ -372,8 +371,11 @@ class MainWindow(QMainWindow):
         drop_layout.addLayout(icon_wrap)
         drop_layout.addWidget(drop_text)
         drop_layout.addWidget(drop_hint)
-        drop_layout.addSpacing(8)
+        drop_layout.addSpacing(6)
         drop_layout.addLayout(btn_wrap)
+        # Size the box to its content and never let it shrink below that,
+        # otherwise Qt squeezes the icon/label/button on top of each other.
+        drop.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         add_shadow(drop, blur=40, y=14, alpha=150)
         layout.addWidget(drop)
 
@@ -390,7 +392,7 @@ class MainWindow(QMainWindow):
 
         self.list_widget = DropList()
         self.list_widget.setObjectName("fileList")
-        self.list_widget.setMinimumHeight(128)
+        self.list_widget.setMinimumHeight(150)
         self.list_widget.setSelectionMode(QAbstractItemView.NoSelection)
         self.list_widget.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list_widget.files_dropped.connect(self.add_files)
