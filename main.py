@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QListWidget, QListWidgetItem, QFileDialog, QProgressBar,
     QSpinBox, QMessageBox, QAbstractItemView, QFrame, QGraphicsDropShadowEffect,
+    QScrollArea,
 )
 
 TARGET_KB = 100
@@ -281,7 +282,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Image Compressor")
-        self.setMinimumSize(880, 840)
+        self.setMinimumSize(820, 560)
         self.files = []
         self.rows = []
         self.worker = None
@@ -289,12 +290,12 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
     def _build_ui(self):
-        root = Backdrop()
-        layout = QVBoxLayout(root)
-        layout.setContentsMargins(30, 26, 30, 26)
-        layout.setSpacing(18)
+        backdrop = Backdrop()
+        outer = QVBoxLayout(backdrop)
+        outer.setContentsMargins(30, 26, 30, 26)
+        outer.setSpacing(16)
 
-        # --- Header ------------------------------------------------------
+        # Header stays fixed at the top.
         header = QHBoxLayout()
         header.setSpacing(14)
 
@@ -318,19 +319,32 @@ class MainWindow(QMainWindow):
         badge = QLabel("●  OFFLINE")
         badge.setObjectName("badge")
         header.addWidget(badge, alignment=Qt.AlignTop)
-        layout.addLayout(header)
+        outer.addLayout(header)
+
+        # The middle section scrolls when the window is short.
+        scroll = QScrollArea()
+        scroll.setObjectName("scroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        root = QWidget()
+        root.setObjectName("content")
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(0, 0, 6, 0)
+        layout.setSpacing(13)
 
         # --- Drop zone ---------------------------------------------------
         drop = QFrame()
         drop.setObjectName("dropArea")
-        drop.setMinimumHeight(224)
+        drop.setMinimumHeight(150)
         drop_layout = QVBoxLayout(drop)
-        drop_layout.setContentsMargins(20, 26, 20, 26)
-        drop_layout.setSpacing(6)
+        drop_layout.setContentsMargins(18, 16, 18, 16)
+        drop_layout.setSpacing(3)
 
         drop_icon = QLabel("＋")
         drop_icon.setObjectName("dropIcon")
-        drop_icon.setFixedSize(66, 66)
+        drop_icon.setFixedSize(56, 56)
         drop_icon.setAlignment(Qt.AlignCenter)
 
         drop_text = QLabel("Drop your images here")
@@ -376,7 +390,7 @@ class MainWindow(QMainWindow):
 
         self.list_widget = DropList()
         self.list_widget.setObjectName("fileList")
-        self.list_widget.setMinimumHeight(180)
+        self.list_widget.setMinimumHeight(128)
         self.list_widget.setSelectionMode(QAbstractItemView.NoSelection)
         self.list_widget.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list_widget.files_dropped.connect(self.add_files)
@@ -437,7 +451,6 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
         self.progress.setFixedHeight(12)
-        layout.addWidget(self.progress)
 
         # --- Footer ------------------------------------------------------
         footer = QHBoxLayout()
@@ -454,9 +467,15 @@ class MainWindow(QMainWindow):
         self.compress_btn.clicked.connect(self.start_compression)
         add_shadow(self.compress_btn, blur=26, y=8, alpha=170, color="#000000")
         footer.addWidget(self.compress_btn)
-        layout.addLayout(footer)
 
-        self.setCentralWidget(root)
+        layout.addStretch()
+        scroll.setWidget(root)
+
+        outer.addWidget(scroll, 1)
+        outer.addWidget(self.progress)
+        outer.addLayout(footer)
+
+        self.setCentralWidget(backdrop)
         up, down = _write_arrow_assets(Path(tempfile.gettempdir()) / "image_compressor_assets")
         css = STYLESHEET.replace("__ARROW_UP__", up.as_posix()).replace("__ARROW_DOWN__", down.as_posix())
         self.setStyleSheet(css)
@@ -555,6 +574,18 @@ QWidget#root {
     font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
     font-size: 10pt;
 }
+QWidget#content { background: transparent; }
+QScrollArea#scroll { background: transparent; border: 0; }
+QScrollArea#scroll > QWidget > QWidget { background: transparent; }
+QScrollBar:vertical {
+    background: transparent; width: 10px; margin: 4px 2px 4px 0;
+}
+QScrollBar::handle:vertical {
+    background: rgba(255, 255, 255, 0.16); border-radius: 5px; min-height: 40px;
+}
+QScrollBar::handle:vertical:hover { background: rgba(255, 255, 255, 0.30); }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 
 QLabel#logoMark {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #fafafa, stop:1 #c9c9c9);
@@ -610,8 +641,8 @@ QLabel#dropIcon {
     color: #f0f0f0;
     background: rgba(255, 255, 255, 0.07);
     border: 1px solid rgba(255, 255, 255, 0.22);
-    border-radius: 33px;
-    font-size: 30pt;
+    border-radius: 28px;
+    font-size: 26pt;
 }
 QLabel#dropText { color: #f7f7f7; font-size: 15pt; font-weight: 600; }
 
